@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sentinel-2 Map Viewer</title>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body, html { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 90vh; }
+    #controls { padding: 0.5rem; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    select { margin: 0 0.5rem 0.5rem 0; padding: 0.3rem; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label for="dateSelect">Date:</label>
+    <select id="dateSelect"></select>
+  </div>
+  <div id="map"></div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const imgDir = './images';               // directory with your JPEGs
+    const imgSizeMeters = 2560;              // 256px * 10m resolution
+    let map;
+    let markers = [];
+    let overlays = [];
+
+    function init(metadata) {
+      // Initialize map
+      const allPoints = Object.values(metadata).map(p => [p.lat, p.lng]);
+      map = L.map('map').fitBounds(allPoints);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
+
+      // Build date dropdown: unique sorted dates across all points
+      const dateSet = new Set();
+      Object.values(metadata).forEach(p => p.dates.forEach(d => dateSet.add(d)));
+      const allDates = Array.from(dateSet).sort();
+      const dateSelect = document.getElementById('dateSelect');
+      allDates.forEach(d => {
+        const opt = document.createElement('option'); opt.value = d; opt.text = d;
+        dateSelect.appendChild(opt);
+      });
+
+      dateSelect.addEventListener('change', () => updateAll(metadata, dateSelect.value));
+
+      // Initial load: select first date
+      dateSelect.value = allDates[0] || '';
+      updateAll(metadata, dateSelect.value);
+    }
+
+    function updateAll(metadata, selectedDate) {
+      // Clear existing
+      markers.forEach(m => map.removeLayer(m)); markers = [];
+      overlays.forEach(o => map.removeLayer(o)); overlays = [];
+
+      const selTime = new Date(selectedDate);
+
+      Object.entries(metadata).forEach(([pid, p]) => {
+        // Find closest available date
+        let closest = p.dates.reduce((prev, curr) => {
+          const diffCurr = Math.abs(new Date(curr) - selTime);
+          const diffPrev = Math.abs(new Date(prev) - selTime);
+          return diffCurr < diffPrev ? curr : prev;
+        }, p.dates[0]);
+
+        const { lat, lng } = p;
+        // Calculate bounds
+        const halfSide = imgSizeMeters / 2;
+        const deltaLat = halfSide / 111320;
+        const deltaLng = halfSide / (111320 * Math.cos(lat * Math.PI / 180));
+        const sw = [lat - deltaLat, lng - deltaLng];
+        const ne = [lat + deltaLat, lng + deltaLng];
+
+        // Add marker
+        const m = L.circleMarker([lat, lng], { radius: 4, color: '#00f' }).addTo(map);
+        markers.push(m);
+
+        // Add overlay
+        const url = `${imgDir}/point_${pid}_${closest}.jpg`;
+        const o = L.imageOverlay(url, [sw, ne]).addTo(map);
+        overlays.push(o);
+      });
+    }
+
+    // Load manifest.json and start
+    fetch('manifest.json')
+      .then(resp => { if (!resp.ok) throw new Error('manifest.json not found'); return resp.json(); })
+      .then(init)
+      .catch(err => console.error('Failed to load manifest.json:', err));
+  </script>
+</body>
+</html>
